@@ -201,6 +201,7 @@ tbody tr{cursor:pointer;transition:background .15s}tbody tr:hover{background:var
     <div class="cfg-step"><span class="sn">2</span><span><strong>Authentication → Sign-in method → E-mail/senha</strong> → Ativar</span></div>
     <div class="cfg-step"><span class="sn">3</span><span><strong>Firestore Database → Criar banco → Modo produção</strong></span></div>
     <div class="cfg-step"><span class="sn">4</span><span><strong>Configurações do projeto (⚙) → Seus apps → Web (</> )</strong> → copie e cole o objeto <code style="color:var(--gn);font-size:.68rem">firebaseConfig</code> abaixo:</span></div>
+    <div class="cfg-step"><span class="sn">5</span><span><strong>Authentication → Settings → Authorized domains</strong> → Adicionar <code style="color:var(--gn);font-size:.68rem">nlsoarez.github.io</code></span></div>
   </div>
   <textarea id="fbConfigInput" class="cfg-textarea" placeholder="const firebaseConfig = {&#10;  apiKey: &quot;AIza...&quot;,&#10;  authDomain: &quot;seu-projeto.firebaseapp.com&quot;,&#10;  projectId: &quot;seu-projeto&quot;,&#10;  ...&#10;};"></textarea>
   <button class="auth-btn" id="cfgBtn" onclick="doSaveFbConfig()">Salvar e Continuar</button>
@@ -327,7 +328,7 @@ function _showCfgScreen(){
   document.getElementById('portalWrap').classList.add('portal-hidden');
 }
 
-function doSaveFbConfig(){
+async function doSaveFbConfig(){
   const text=document.getElementById('fbConfigInput').value.trim();
   const errEl=document.getElementById('cfgErr');
   const btn=document.getElementById('cfgBtn');
@@ -342,13 +343,28 @@ function doSaveFbConfig(){
   if(!cfg.apiKey||cfg.apiKey==='TODO'){errEl.textContent='apiKey não encontrado. Verifique se colou o objeto firebaseConfig completo.';return;}
   if(!cfg.projectId){errEl.textContent='projectId não encontrado.';return;}
   if(!cfg.authDomain){errEl.textContent='authDomain não encontrado.';return;}
-  btn.disabled=true;btn.textContent='Salvando…';
+  btn.disabled=true;btn.textContent='Verificando chave…';
   try{
+    // Valida o API key via REST antes de inicializar o SDK (evita ficar preso com chave inválida)
+    const resp=await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${cfg.apiKey}`,{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({email:'test@test.test',password:'wrongpwd',returnSecureToken:false})
+    });
+    const data=await resp.json();
+    if(data.error?.message==='API_KEY_INVALID'){
+      errEl.textContent='API key inválida. Verifique se copiou o firebaseConfig correto do seu projeto Firebase.';
+      return;
+    }
+    // Qualquer outro erro (INVALID_EMAIL, EMAIL_NOT_FOUND, etc.) significa que a chave é válida
     localStorage.setItem('fbConfig',JSON.stringify(cfg));
-    document.getElementById('cfgScreen').style.display='none';
-    _initFirebase(cfg);
-  }catch(e){errEl.textContent='Erro ao inicializar Firebase: '+e.message;console.error(e);}
-  finally{btn.disabled=false;btn.textContent='Salvar e Continuar';}
+    errEl.style.color='var(--gn)';errEl.textContent='Configuração válida! Carregando…';
+    // Recarrega a página para inicializar o SDK limpo com o config correto
+    setTimeout(()=>location.reload(),800);
+  }catch(e){
+    errEl.style.color='var(--rd)';
+    errEl.textContent='Erro de rede ao validar. Verifique sua conexão e tente novamente.';
+    console.error(e);
+  }finally{btn.disabled=false;btn.textContent='Salvar e Continuar';}
 }
 
 function doResetFbConfig(){
@@ -398,18 +414,25 @@ async function doLogin(){
   try{
     await auth.signInWithEmailAndPassword(u+'@cop.rede',p);
   }catch(e){
+    console.error('Login error:',e.code,e.message);
+    // API key inválida — limpa config salvo e recarrega para nova tentativa
+    if(e.code&&e.code.includes('api-key')){
+      localStorage.removeItem('fbConfig');
+      errEl.textContent='API key inválida. Reconfigurando Firebase…';
+      setTimeout(()=>location.reload(),1200);
+      return;
+    }
     const msgs={
-      'auth/user-not-found':'Usuário não encontrado. Execute o setup primeiro.',
+      'auth/user-not-found':'Usuário não encontrado. Execute o setup (?setup=true) primeiro.',
       'auth/wrong-password':'Senha incorreta.',
       'auth/invalid-credential':'Usuário ou senha incorretos.',
       'auth/invalid-login-credentials':'Usuário ou senha incorretos.',
       'auth/invalid-email':'Formato de usuário inválido.',
       'auth/too-many-requests':'Muitas tentativas. Aguarde alguns minutos.',
       'auth/network-request-failed':'Erro de rede. Verifique sua conexão.',
-      'auth/api-key-not-valid':'Firebase não configurado. Verifique o firebaseConfig.'
+      'auth/unauthorized-domain':'Domínio não autorizado. Adicione "nlsoarez.github.io" em Firebase → Authentication → Settings → Authorized domains.'
     };
     errEl.textContent=msgs[e.code]||('Erro ('+e.code+'): '+e.message);
-    console.error('Login error:',e.code,e.message);
   }finally{btn.disabled=false;btn.textContent='Entrar';}
 }
 
