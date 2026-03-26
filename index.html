@@ -220,22 +220,134 @@ function togUP(){upOpen=!upOpen;document.getElementById('upBody').classList.togg
 
 function ldShow(msg,sub){const o=document.getElementById('ldOv');document.getElementById('ldMsg').textContent=msg||'Processando planilha...';document.getElementById('ldSub').textContent=sub||'Arquivos grandes podem levar alguns segundos';o.classList.add('show');}
 function ldHide(){document.getElementById('ldOv').classList.remove('show');}
-function yieldUI(){return new Promise(r=>setTimeout(r,0));}
+
+// ═══════════ WEB WORKER (inline) ═══════════
+const _workerCode=`
+importScripts('https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js');
+
+function ak(a){var s=String(a);return/^\\d{6}$/.test(s)?s:null;}
+
+function parseResW(buf){
+  var wb=XLSX.read(buf,{type:'array'});
+  var ws=wb.Sheets[wb.SheetNames[0]],rows=XLSX.utils.sheet_to_json(ws);
+  var T=['ETIT GPON','ETIT FIBRA HFC','ASSERTIVIDADE ACIONAMENTO GPON','ASSERTIVIDADE ACIONAMENTO FIBRA HFC'];
+  var res={},months=[];
+  for(var i=0;i<rows.length;i++){
+    var r=rows[i],ind=r['INDICADOR_NOME_ICG'];if(T.indexOf(ind)<0)continue;
+    var k=ak(r['ANOMES']);if(!k)continue;if(months.indexOf(k)<0)months.push(k);
+    if(!res[k])res[k]={};if(!res[k][ind])res[k][ind]={t:0,a:0};
+    res[k][ind].t++;res[k][ind].a+=(Number(r['INDICADOR'])||0);
+  }
+  for(var j=0;j<months.length;j++){var mk=months[j];for(var ind2 in res[mk]){var d=res[mk][ind2];d.p=d.t>0?(d.a/d.t*100):0;}}
+  return{data:res,months:months};
+}
+
+function parseTOAW(buf){
+  var wb=XLSX.read(buf,{type:'array'});
+  var ws=wb.Sheets[wb.SheetNames[0]],rows=XLSX.utils.sheet_to_json(ws);
+  var toa={},months=[];
+  for(var i=0;i<rows.length;i++){
+    var r=rows[i];
+    if(r['INDICADOR_NOME']!=='TEMPO DE VALIDAÇÃO DO FORMULÁRIO')continue;
+    var login=String(r['LOGIN']||'').toUpperCase().trim();if(!login||login==='ROUTING'||login==='NAN')continue;
+    var k=ak(r['ANOMES']);if(!k)continue;if(months.indexOf(k)<0)months.push(k);
+    if(!toa[k])toa[k]={};if(!toa[k][login])toa[k][login]={t:0,a:0,sm:0};
+    var d=toa[k][login];d.t++;d.a+=(Number(r['INDICADOR'])||0);
+    var tmr=r['TMR'],m=0;
+    if(typeof tmr==='number')m=tmr*24*60;
+    else if(typeof tmr==='string'){var a=tmr.match(/(\\d+)\\s*days?\\s*(\\d+):(\\d+)/);if(a)m=+a[1]*1440+ +a[2]*60+ +a[3];else{var b=tmr.match(/(\\d+):(\\d+):(\\d+)/);if(b)m=+b[1]*60+ +b[2]+ +b[3]/60;}}
+    d.sm+=m;
+  }
+  return{data:toa,months:months};
+}
+
+function parseChatW(buf){
+  var wb=XLSX.read(buf,{type:'array'});
+  var ws=wb.Sheets[wb.SheetNames[0]],raw=XLSX.utils.sheet_to_json(ws,{header:1,defval:null});
+  var hi=-1,hdr=[];for(var i=0;i<Math.min(10,raw.length);i++){if(raw[i]&&raw[i].some(function(c){return String(c||'')==='ID_CHAT';})){hi=i;hdr=raw[i].map(function(c){return String(c||'');});break;}}
+  if(hi<0)return{error:'Chat TOA: cabeçalho não encontrado'};
+  var col={};hdr.forEach(function(h,idx){col[h]=idx;});
+  var cL=col['FECHAMENTO_COPREDE_LOGIN_ANALISTA'],cM=col['MINUTOS_TMA'],cI=col['INDICADOR_TMA_DENTRO'],cA=col['ABERTURA_ANOMES'];
+  var chat={},months=[];
+  for(var j=hi+1;j<raw.length;j++){
+    var row=raw[j];if(!row)continue;
+    var login=String(row[cL]||'').toUpperCase().trim();if(!login||login==='NAN')continue;
+    var akv=ak(Math.round(Number(row[cA])));if(!akv)continue;if(months.indexOf(akv)<0)months.push(akv);
+    var mins=Number(row[cM]),ind=Number(row[cI]);
+    if(!chat[akv])chat[akv]={};if(!chat[akv][login])chat[akv][login]={t:0,a:0,sm:0};
+    var d=chat[akv][login];d.t++;if(!isNaN(ind))d.a+=ind;if(!isNaN(mins))d.sm+=mins;
+  }
+  return{data:chat,months:months};
+}
+
+self.onmessage=function(e){
+  var type=e.data.type,buf=e.data.buffer,result;
+  try{
+    if(type==='res')result=parseResW(buf);
+    else if(type==='toa')result=parseTOAW(buf);
+    else if(type==='chat')result=parseChatW(buf);
+    self.postMessage({type:type,result:result});
+  }catch(err){self.postMessage({type:type,error:err.message});}
+};
+`;
+const _xlsWorker=new Worker(URL.createObjectURL(new Blob([_workerCode],{type:'application/javascript'})));
+
+function runWorker(type,buffer){
+  return new Promise((resolve,reject)=>{
+    const handler=e=>{
+      if(e.data.type!==type)return;
+      _xlsWorker.removeEventListener('message',handler);
+      if(e.data.error)reject(new Error(e.data.error));
+      else resolve(e.data.result);
+    };
+    _xlsWorker.addEventListener('message',handler);
+    _xlsWorker.postMessage({type,buffer},[buffer]);
+  });
+}
+
+function mergeRes(result){
+  for(const mk of result.months){
+    if(!D.res[mk])D.res[mk]={};
+    for(const[ind,d]of Object.entries(result.data[mk]||{})){
+      if(!D.res[mk][ind])D.res[mk][ind]={t:0,a:0,p:0};
+      D.res[mk][ind].t+=d.t;D.res[mk][ind].a+=d.a;D.res[mk][ind].p=D.res[mk][ind].t>0?(D.res[mk][ind].a/D.res[mk][ind].t*100):0;
+    }
+    D.ld.res.add(mk);
+  }
+}
+function mergeTOA(result){
+  for(const mk of result.months){
+    if(!D.toa[mk])D.toa[mk]={};
+    for(const[login,d]of Object.entries(result.data[mk]||{})){
+      if(!D.toa[mk][login])D.toa[mk][login]={t:0,a:0,sm:0};
+      D.toa[mk][login].t+=d.t;D.toa[mk][login].a+=d.a;D.toa[mk][login].sm+=d.sm;
+    }
+    D.ld.toa.add(mk);
+  }
+}
+function mergeChat(result){
+  if(result.error){alert(result.error);return;}
+  for(const mk of result.months){
+    if(!D.chat[mk])D.chat[mk]={};
+    for(const[login,d]of Object.entries(result.data[mk]||{})){
+      if(!D.chat[mk][login])D.chat[mk][login]={t:0,a:0,sm:0};
+      D.chat[mk][login].t+=d.t;D.chat[mk][login].a+=d.a;D.chat[mk][login].sm+=d.sm;
+    }
+    D.ld.chat.add(mk);
+  }
+}
 
 async function onFiles(input,type){
   const files=Array.from(input.files);if(!files.length)return;
   const typeLabel={res:'Indicadores Residencial',toa:'Indicadores TOA',chat:'TOA Chat'}[type]||type;
   for(const file of files){
-    ldShow(`Lendo ${typeLabel}…`,`Arquivo: ${file.name}`);
-    await yieldUI();
-    const buf=await file.arrayBuffer();
-    await yieldUI();
+    ldShow(`Processando ${typeLabel}…`,`Arquivo: ${file.name}`);
     try{
-      const wb=XLSX.read(buf,{type:'array'});
-      await yieldUI();
-      if(type==='res')parseRes(wb);
-      else if(type==='toa')parseTOA(wb);
-      else if(type==='chat')parseChat(wb);
+      const buf=await file.arrayBuffer();
+      const result=await runWorker(type,buf);
+      if(type==='res')mergeRes(result);
+      else if(type==='toa')mergeTOA(result);
+      else if(type==='chat')mergeChat(result);
     }catch(e){ldHide();alert(`Erro em ${file.name}: ${e.message}`);console.error(e);}
   }
   input.value='';
@@ -244,61 +356,10 @@ async function onFiles(input,type){
 }
 async function onDPA(input){
   const file=input.files[0];if(!file)return;
-  ldShow('Lendo Ocupação DPA…',`Arquivo: ${file.name}`);
-  await yieldUI();
+  ldShow('Processando Ocupação DPA…',`Arquivo: ${file.name}`);
   try{await parseDPA(await file.arrayBuffer());}catch(e){ldHide();alert('Erro DPA: '+e.message);console.error(e);return;}
   ldHide();
   input.value='';updUI();render();
-}
-
-// ═══════════ PARSERS ═══════════
-function parseRes(wb){
-  const ws=wb.Sheets[wb.SheetNames[0]];const rows=XLSX.utils.sheet_to_json(ws);
-  const T=['ETIT GPON','ETIT FIBRA HFC','ASSERTIVIDADE ACIONAMENTO GPON','ASSERTIVIDADE ACIONAMENTO FIBRA HFC'];
-  const months=new Set();
-  for(const r of rows){
-    const ind=r['INDICADOR_NOME_ICG'];if(!T.includes(ind))continue;
-    const k=anomes2key(r['ANOMES']);if(!k)continue;months.add(k);
-    if(!D.res[k])D.res[k]={};if(!D.res[k][ind])D.res[k][ind]={t:0,a:0};
-    D.res[k][ind].t++;D.res[k][ind].a+=(Number(r['INDICADOR'])||0);
-  }
-  for(const k of months){D.ld.res.add(k);for(const ind of Object.keys(D.res[k])){const d=D.res[k][ind];d.p=d.t>0?(d.a/d.t*100):0;}}
-}
-
-function parseTOA(wb){
-  const ws=wb.Sheets[wb.SheetNames[0]];const rows=XLSX.utils.sheet_to_json(ws);
-  const months=new Set();
-  for(const r of rows){
-    if(r['INDICADOR_NOME']!=='TEMPO DE VALIDAÇÃO DO FORMULÁRIO')continue;
-    const login=String(r['LOGIN']||'').toUpperCase().trim();if(!login||login==='ROUTING'||login==='NAN')continue;
-    const k=anomes2key(r['ANOMES']);if(!k)continue;months.add(k);
-    if(!D.toa[k])D.toa[k]={};if(!D.toa[k][login])D.toa[k][login]={t:0,a:0,sm:0};
-    const d=D.toa[k][login];d.t++;d.a+=(Number(r['INDICADOR'])||0);
-    const tmr=r['TMR'];let m=0;
-    if(typeof tmr==='number')m=tmr*24*60;
-    else if(tmr instanceof Date)m=tmr.getHours()*60+tmr.getMinutes()+tmr.getSeconds()/60;
-    else if(typeof tmr==='string'){const a=tmr.match(/(\d+)\s*days?\s*(\d+):(\d+)/);if(a)m=+a[1]*1440+ +a[2]*60+ +a[3];else{const b=tmr.match(/(\d+):(\d+):(\d+)/);if(b)m=+b[1]*60+ +b[2]+ +b[3]/60;}}
-    d.sm+=m;
-  }
-  for(const k of months)D.ld.toa.add(k);
-}
-
-function parseChat(wb){
-  const ws=wb.Sheets[wb.SheetNames[0]];const raw=XLSX.utils.sheet_to_json(ws,{header:1,defval:null});
-  let hi=-1,hdr=[];for(let i=0;i<Math.min(10,raw.length);i++){if(raw[i]&&raw[i].some(c=>String(c||'')==='ID_CHAT')){hi=i;hdr=raw[i].map(c=>String(c||''));break;}}
-  if(hi<0){alert('Chat TOA: cabeçalho não encontrado');return;}
-  const col={};hdr.forEach((h,i)=>{col[h]=i;});
-  const cL=col['FECHAMENTO_COPREDE_LOGIN_ANALISTA'],cM=col['MINUTOS_TMA'],cI=col['INDICADOR_TMA_DENTRO'],cA=col['ABERTURA_ANOMES'];
-  const months=new Set();
-  for(let i=hi+1;i<raw.length;i++){
-    const row=raw[i];if(!row)continue;
-    const login=String(row[cL]||'').toUpperCase().trim();if(!login||login==='NAN'||!login)continue;
-    const ak=anomes2key(Math.round(Number(row[cA])));if(!ak)continue;months.add(ak);
-    const mins=Number(row[cM]),ind=Number(row[cI]);
-    if(!D.chat[ak])D.chat[ak]={};if(!D.chat[ak][login])D.chat[ak][login]={t:0,a:0,sm:0};
-    const d=D.chat[ak][login];d.t++;if(!isNaN(ind))d.a+=ind;if(!isNaN(mins))d.sm+=mins;
-  }
-  for(const k of months)D.ld.chat.add(k);
 }
 
 async function parseDPA(buf){
