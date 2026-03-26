@@ -397,11 +397,10 @@ function genShareLink(){
   if(!stored){alert('Firebase não configurado neste dispositivo.');return;}
   try{
     const cfg=JSON.parse(stored);
-    const encoded=btoa(JSON.stringify(cfg));
-    const url=location.origin+location.pathname+'#c='+encoded;
+    const short=cfg.projectId+':'+cfg.apiKey;
+    const url=location.origin+location.pathname+'?fb='+encodeURIComponent(short);
     document.getElementById('shareLinkInput').value=url;
-    const box=document.getElementById('shareLinkBox');
-    box.style.display='flex';
+    document.getElementById('shareLinkBox').style.display='flex';
     document.getElementById('genLinkBtn').style.display='none';
   }catch(e){alert('Erro ao gerar link: '+e.message);}
 }
@@ -421,25 +420,39 @@ function copyShareLink(){
 
 // Auto-init on load
 (function(){
-  // 1. Tenta importar config do fragmento de URL (#c=BASE64)
+  // 1. Tenta importar config curto do ?fb=PROJECTID:APIKEY
+  const params=new URLSearchParams(location.search);
+  const fb=params.get('fb');
+  if(fb){
+    const idx=fb.indexOf(':');
+    if(idx>0){
+      const projectId=fb.slice(0,idx);
+      const apiKey=fb.slice(idx+1);
+      if(projectId&&apiKey){
+        const cfg={apiKey,authDomain:projectId+'.firebaseapp.com',projectId,storageBucket:projectId+'.appspot.com'};
+        localStorage.setItem('fbConfig',JSON.stringify(cfg));
+        history.replaceState(null,'',location.pathname);
+      }
+    }
+  }
+  // 2. Tenta importar config completo do fragmento de URL (#c=BASE64) — legado
   const hash=location.hash;
   if(hash.startsWith('#c=')){
     try{
       const cfg=JSON.parse(atob(hash.slice(3)));
       if(cfg.apiKey&&cfg.projectId){
         localStorage.setItem('fbConfig',JSON.stringify(cfg));
-        // Limpa o hash da URL sem recarregar
         history.replaceState(null,'',location.pathname+location.search);
       }
     }catch(_){}
   }
-  // 2. Usa config do localStorage
+  // 3. Usa config do localStorage
   const stored=localStorage.getItem('fbConfig');
   if(stored){
     try{_initFirebase(JSON.parse(stored));return;}
     catch(e){localStorage.removeItem('fbConfig');console.warn('Config inválido no localStorage, redefinindo.');}
   }
-  // 3. Sem config: mostra tela de configuração
+  // 4. Sem config: mostra tela de configuração
   _showCfgScreen();
 })();
 
@@ -452,7 +465,19 @@ function showScreen(id){
 function _setupAuthListener(){
   auth.onAuthStateChanged(async fbUser=>{
     if(_setupInProgress)return;
-    if(!fbUser){showScreen(_isSetup?'setupScreen':'loginScreen');return;}
+    if(!fbUser){
+      if(_isSetup){
+        try{
+          const snap=await db.collection('config').doc('setup').get();
+          if(snap.exists&&snap.data().done){
+            history.replaceState(null,'',location.origin+location.pathname);
+            showScreen('loginScreen');return;
+          }
+        }catch(_){}
+        showScreen('setupScreen');
+      }else{showScreen('loginScreen');}
+      return;
+    }
     try{
       const snap=await db.collection('users').doc(fbUser.uid).get();
       if(!snap.exists){await auth.signOut();showScreen('loginScreen');return;}
@@ -584,8 +609,9 @@ async function doSetup(){
   try{
     const cfgSnap=await db.collection('config').doc('setup').get();
     if(cfgSnap.exists&&cfgSnap.data().done){
-      msg.style.color='var(--yl)';msg.textContent='Setup já executado. Se precisar recriar, delete o doc config/setup no Firestore.';
+      msg.style.color='var(--yl)';msg.textContent='Setup já executado. Redirecionando para login…';
       btn.disabled=false;btn.textContent='Criar Usuários Agora';
+      setTimeout(()=>{history.replaceState(null,'',location.origin+location.pathname);showScreen('loginScreen');},1500);
       return;
     }
     const results=[];
@@ -607,8 +633,8 @@ async function doSetup(){
     }
     msg.style.color='var(--gn)';
     msg.textContent='Concluído! '+results.join(' | ');
-    // Redireciona para login após 2s
-    setTimeout(()=>{showScreen('loginScreen');},2000);
+    // Redireciona para login após 2s, limpando ?setup=true da URL
+    setTimeout(()=>{history.replaceState(null,'',location.origin+location.pathname);showScreen('loginScreen');},2000);
   }catch(e){msg.style.color='var(--rd)';msg.textContent='Erro no setup: '+e.message;console.error(e);}
   finally{
     _setupInProgress=false;
