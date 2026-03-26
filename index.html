@@ -209,6 +209,20 @@ tbody tr{cursor:pointer;transition:background .15s}tbody tr:hover{background:var
 </div>
 </div>
 
+<!-- SETUP SCREEN (standalone, antes do login) -->
+<div id="setupScreen" class="auth-screen" style="display:none">
+<div class="auth-card" style="max-width:460px">
+  <div class="auth-logo"><div class="logo-i">CR</div><div><h2>Configuração Inicial</h2><span>Criar contas dos usuários</span></div></div>
+  <hr class="auth-divider">
+  <h3 style="font-size:.85rem;font-weight:600;color:var(--tx);text-align:left">Criar os 5 usuários no Firebase</h3>
+  <p style="font-size:.71rem;color:var(--tx3);line-height:1.6">Este passo cria as contas de <strong style="color:var(--tx2)">nelson, pralon, marcos, luiz e vinicius</strong> no Firebase Authentication. Execute <strong style="color:var(--tx2)">apenas uma vez</strong>. Todos terão a senha inicial <code style="color:var(--gn);font-size:.68rem">claro123</code>.</p>
+  <button class="auth-btn" id="setupBtn" onclick="doSetup()">Criar Usuários Agora</button>
+  <div id="setupMsg" style="font-size:.72rem;text-align:center;min-height:16px;line-height:1.5;margin-top:2px"></div>
+  <hr class="auth-divider">
+  <p style="font-size:.68rem;color:var(--tx3);text-align:center">Após criar os usuários, <button onclick="showScreen('loginScreen')" style="background:none;border:none;color:var(--ac2);cursor:pointer;font-size:.68rem;font-family:inherit;padding:0">clique aqui para ir ao login</button></p>
+</div>
+</div>
+
 <div id="portalWrap" class="portal-hidden">
 <div class="hdr"><div class="hdr-in">
 <div class="logo"><div class="logo-i">CR</div><div><h1>COP Rede — Avaliação Home Office</h1><span>Monitoramento contínuo de KPIs</span></div></div>
@@ -220,14 +234,6 @@ tbody tr{cursor:pointer;transition:background .15s}tbody tr:hover{background:var
 </div>
 </div></div>
 <div class="main">
-
-<!-- SETUP PANEL (só aparece com ?setup=true) -->
-<div class="setup-panel" id="setupPanel">
-  <h3>⚙ Configuração Inicial — Criar Usuários</h3>
-  <p>Este painel cria as 5 contas no Firebase Authentication e os perfis no Firestore. Execute apenas uma vez. Certifique-se de que o Firebase está configurado corretamente antes de continuar.</p>
-  <button class="auth-btn" id="setupBtn" onclick="doSetup()" style="width:auto;padding:8px 20px;font-size:.78rem">Criar Usuários Agora</button>
-  <div class="auth-err" id="setupMsg" style="margin-top:8px;color:var(--gn)"></div>
-</div>
 
 <!-- UPLOAD (admins only) -->
 <div id="uploadSection" style="margin-bottom:1.3rem">
@@ -384,14 +390,14 @@ function doResetFbConfig(){
 
 // ═══════════ AUTH FLOW ═══════════
 function showScreen(id){
-  ['loginScreen','pwdScreen','cfgScreen'].forEach(s=>{const el=document.getElementById(s);if(el)el.style.display=s===id?'flex':'none';});
+  ['loginScreen','pwdScreen','cfgScreen','setupScreen'].forEach(s=>{const el=document.getElementById(s);if(el)el.style.display=s===id?'flex':'none';});
   const pw=document.getElementById('portalWrap');if(pw)pw.classList.toggle('portal-hidden',!!id);
 }
 
 function _setupAuthListener(){
   auth.onAuthStateChanged(async fbUser=>{
     if(_setupInProgress)return;
-    if(!fbUser){showScreen('loginScreen');return;}
+    if(!fbUser){showScreen(_isSetup?'setupScreen':'loginScreen');return;}
     try{
       const snap=await db.collection('users').doc(fbUser.uid).get();
       if(!snap.exists){await auth.signOut();showScreen('loginScreen');return;}
@@ -541,12 +547,13 @@ async function doSetup(){
     }
     await db.collection('config').doc('setup').set({done:true,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
     msg.style.color='var(--gn)';
-    msg.textContent='Concluído! '+results.join(' | ')+' — Agora faça login normalmente.';
+    msg.textContent='Concluído! '+results.join(' | ');
+    // Redireciona para login após 2s
+    setTimeout(()=>{showScreen('loginScreen');},2000);
   }catch(e){msg.style.color='var(--rd)';msg.textContent='Erro no setup: '+e.message;console.error(e);}
   finally{
     _setupInProgress=false;
     btn.disabled=false;btn.textContent='Criar Usuários Agora';
-    showScreen('loginScreen'); // volta para tela de login após setup
   }
 }
 
@@ -979,11 +986,8 @@ function expCSV(){
 }
 
 // ═══════════ INIT ═══════════
-// Show setup panel if ?setup=true in URL
-if(new URLSearchParams(window.location.search).get('setup')==='true'){
-  document.getElementById('setupPanel').classList.add('visible');
-}
-// Auth state listener handles all initialization (updUI/render called inside initPortal → loadFromFirestore)
+// If ?setup=true, override to show setup screen after Firebase is ready
+const _isSetup=new URLSearchParams(window.location.search).get('setup')==='true';
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeDet();});
 </script>
 </body>
