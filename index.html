@@ -574,6 +574,7 @@ async function loadFromFirestore(){
       if(snap.exists){
         const d=snap.data();
         D[t]=d.data||{};
+        if(t==='res'){for(const mk in D.res){for(const ind in D.res[mk]){const v=D.res[mk][ind];if(v&&typeof v.t==='number'){D.res[mk][ind]={_GRUPO:{t:v.t,a:v.a,p:v.p}};}}}}
         D.ld[t]=new Set(d.months||[]);
       }
     });
@@ -756,7 +757,7 @@ function mergeRes(result){
   for(const mk of result.months){
     if(!D.res[mk])D.res[mk]={};
     for(const[ind,loginMap]of Object.entries(result.data[mk]||{})){
-      if(!D.res[mk][ind])D.res[mk][ind]={};
+      if(!D.res[mk][ind]||typeof D.res[mk][ind].t==='number')D.res[mk][ind]={};
       for(const[login,d]of Object.entries(loginMap)){
         if(!D.res[mk][ind][login])D.res[mk][ind][login]={t:0,a:0,p:0};
         D.res[mk][ind][login].t+=d.t;D.res[mk][ind][login].a+=d.a;D.res[mk][ind][login].p=D.res[mk][ind][login].t>0?(D.res[mk][ind][login].a/D.res[mk][ind][login].t*100):0;
@@ -908,7 +909,7 @@ function getM(id,mk){
   if(D.dpa[mk]&&D.dpa[mk][u]!==undefined)r.dpa=D.dpa[mk][u]*100;
   if(D.toa[mk]&&D.toa[mk][u]){const d=D.toa[mk][u];r.toa={p:d.t>0?(d.a/d.t*100):0,am:d.t>0?(d.sm/d.t):0,t:d.t};}
   if(D.chat[mk]&&D.chat[mk][u]){const d=D.chat[mk][u];r.chat={p:d.t>0?(d.a/d.t*100):0,am:d.t>0?(d.sm/d.t):0,t:d.t};}
-  if(D.res[mk])for(const[ind,v]of Object.entries(D.res[mk])){if(v&&typeof v.t==='number')r.etit[ind]={...v};else if(v&&v[u])r.etit[ind]={...v[u]};}
+  if(D.res[mk])for(const[ind,v]of Object.entries(D.res[mk])){if(v&&v[u])r.etit[ind]={...v[u]};}
   return r;
 }
 function getAgg(id,filterMk){
