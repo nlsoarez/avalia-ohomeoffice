@@ -675,14 +675,17 @@ function parseResW(buf){
   var wb=XLSX.read(buf,{type:'array'});
   var ws=wb.Sheets[wb.SheetNames[0]],rows=XLSX.utils.sheet_to_json(ws);
   var T=['ETIT GPON','ETIT FIBRA HFC','ASSERTIVIDADE ACIONAMENTO GPON','ASSERTIVIDADE ACIONAMENTO FIBRA HFC'];
+  var GPON_INDS=['ETIT GPON','ASSERTIVIDADE ACIONAMENTO GPON'];
   var res={},months=[];
   for(var i=0;i<rows.length;i++){
     var r=rows[i],ind=r['INDICADOR_NOME_ICG'];if(T.indexOf(ind)<0)continue;
     var k=ak(r['ANOMES']);if(!k)continue;if(months.indexOf(k)<0)months.push(k);
-    if(!res[k])res[k]={};if(!res[k][ind])res[k][ind]={t:0,a:0};
-    res[k][ind].t++;res[k][ind].a+=(Number(r['INDICADOR'])||0);
+    var login=GPON_INDS.indexOf(ind)>=0?r['LOGIN_PRIMEIRO_ACIONAMENTO_GPON']:r['LOGIN_PRIMEIRO_ACIONAMENTO_FO'];
+    if(!login)login='_GRUPO';else login=String(login).toUpperCase();
+    if(!res[k])res[k]={};if(!res[k][ind])res[k][ind]={};if(!res[k][ind][login])res[k][ind][login]={t:0,a:0};
+    res[k][ind][login].t++;res[k][ind][login].a+=(Number(r['INDICADOR'])||0);
   }
-  for(var j=0;j<months.length;j++){var mk=months[j];for(var ind2 in res[mk]){var d=res[mk][ind2];d.p=d.t>0?(d.a/d.t*100):0;}}
+  for(var j=0;j<months.length;j++){var mk=months[j];for(var ind2 in res[mk]){for(var lg in res[mk][ind2]){var d=res[mk][ind2][lg];d.p=d.t>0?(d.a/d.t*100):0;}}}
   return{data:res,months:months};
 }
 
@@ -752,9 +755,12 @@ function runWorker(type,buffer){
 function mergeRes(result){
   for(const mk of result.months){
     if(!D.res[mk])D.res[mk]={};
-    for(const[ind,d]of Object.entries(result.data[mk]||{})){
-      if(!D.res[mk][ind])D.res[mk][ind]={t:0,a:0,p:0};
-      D.res[mk][ind].t+=d.t;D.res[mk][ind].a+=d.a;D.res[mk][ind].p=D.res[mk][ind].t>0?(D.res[mk][ind].a/D.res[mk][ind].t*100):0;
+    for(const[ind,loginMap]of Object.entries(result.data[mk]||{})){
+      if(!D.res[mk][ind])D.res[mk][ind]={};
+      for(const[login,d]of Object.entries(loginMap)){
+        if(!D.res[mk][ind][login])D.res[mk][ind][login]={t:0,a:0,p:0};
+        D.res[mk][ind][login].t+=d.t;D.res[mk][ind][login].a+=d.a;D.res[mk][ind][login].p=D.res[mk][ind][login].t>0?(D.res[mk][ind][login].a/D.res[mk][ind][login].t*100):0;
+      }
     }
     D.ld.res.add(mk);
   }
@@ -902,7 +908,7 @@ function getM(id,mk){
   if(D.dpa[mk]&&D.dpa[mk][u]!==undefined)r.dpa=D.dpa[mk][u]*100;
   if(D.toa[mk]&&D.toa[mk][u]){const d=D.toa[mk][u];r.toa={p:d.t>0?(d.a/d.t*100):0,am:d.t>0?(d.sm/d.t):0,t:d.t};}
   if(D.chat[mk]&&D.chat[mk][u]){const d=D.chat[mk][u];r.chat={p:d.t>0?(d.a/d.t*100):0,am:d.t>0?(d.sm/d.t):0,t:d.t};}
-  if(D.res[mk])for(const[ind,d]of Object.entries(D.res[mk]))r.etit[ind]={...d};
+  if(D.res[mk])for(const[ind,v]of Object.entries(D.res[mk])){if(v&&typeof v.t==='number')r.etit[ind]={...v};else if(v&&v[u])r.etit[ind]={...v[u]};}
   return r;
 }
 function getAgg(id,filterMk){
@@ -1045,10 +1051,10 @@ function rDet(){
   <div class="mp"><span class="${dMk==='all'?'active':''}" onclick="dMk='all';rDet()">Média Geral</span>
   ${allMonths().map(m=>`<span class="${dMk===m?'active':''}" onclick="dMk='${m}';rDet()">${key2label(m)}</span>`).join('')}</div>
   <div class="dg">
-  ${mk('ETIT GPON (Grupo)',eg?eg.p:null,90,1,eg?eg.t+' ev':null)}
-  ${mk('ETIT FIBRA HFC (Grupo)',eh?eh.p:null,90,1,eh?eh.t+' ev':null)}
-  ${mk('Assert. GPON (Grupo)',ag?ag.p:null,90,1,ag?ag.t+' ev':null)}
-  ${mk('Assert. FIBRA HFC (Grupo)',ah?ah.p:null,90,1,ah?ah.t+' ev':null)}
+  ${mk('ETIT GPON',eg?eg.p:null,90,1,eg?eg.t+' ev':null)}
+  ${mk('ETIT FIBRA HFC',eh?eh.p:null,90,1,eh?eh.t+' ev':null)}
+  ${mk('Assert. GPON',ag?ag.p:null,90,1,ag?ag.t+' ev':null)}
+  ${mk('Assert. FIBRA HFC',ah?ah.p:null,90,1,ah?ah.t+' ev':null)}
   ${mk('DPA Ocupação',data.dpa,90,1,null)}
   ${mk('Form TOA',data.toa?data.toa.p:null,90,1,data.toa?data.toa.t+' forms · TMA '+fm(data.toa.am):null)}
   ${mk('Chat TOA',data.chat?data.chat.p:null,90,1,data.chat?data.chat.t+' chats · TMA '+fm(data.chat.am):null)}
@@ -1057,7 +1063,7 @@ function rDet(){
   ${mR?`<div class="tw" style="margin-bottom:14px"><div class="tt">Evolução Mensal</div><div class="ts"><table>
   <thead><tr><th>Mês</th><th>ETIT</th><th>Assert.</th><th>DPA</th><th>Form%</th><th>TMA F</th><th>Chat%</th><th>TMA C</th></tr></thead>
   <tbody>${mR}</tbody></table></div></div>`:''}
-  <div class="nb"><strong>Regras:</strong> ETIT e Assertividade = grupo. DPA, Form TOA e Chat TOA = individual. Aprovação = média ≥90% em ≥75% dos meses do período configurado. Melhoria = 80-89%. Reprovado = <80%.</div>`;
+  <div class="nb"><strong>Regras:</strong> ETIT e Assertividade = individual por analista. DPA, Form TOA e Chat TOA = individual. Aprovação = média ≥90% em ≥75% dos meses do período configurado. Melhoria = 80-89%. Reprovado = <80%.</div>`;
 }
 
 // ═══════════ EXPORT ═══════════
