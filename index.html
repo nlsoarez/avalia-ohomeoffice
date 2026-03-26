@@ -291,6 +291,7 @@ firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
 let currentUser = null; // { uid, username, role }
+let _setupInProgress = false; // bloqueia onAuthStateChanged durante setup
 
 // ═══════════ AUTH FLOW ═══════════
 function showScreen(id){
@@ -299,6 +300,7 @@ function showScreen(id){
 }
 
 auth.onAuthStateChanged(async fbUser=>{
+  if(_setupInProgress)return; // ignora durante criação de usuários
   if(!fbUser){showScreen('loginScreen');return;}
   try{
     const snap=await db.collection('users').doc(fbUser.uid).get();
@@ -321,8 +323,18 @@ async function doLogin(){
   try{
     await auth.signInWithEmailAndPassword(u+'@cop.rede',p);
   }catch(e){
-    const msgs={'auth/user-not-found':'Usuário não encontrado.','auth/wrong-password':'Senha incorreta.','auth/invalid-credential':'Usuário ou senha incorretos.','auth/too-many-requests':'Muitas tentativas. Tente novamente mais tarde.'};
-    errEl.textContent=msgs[e.code]||'Erro ao entrar. Verifique suas credenciais.';
+    const msgs={
+      'auth/user-not-found':'Usuário não encontrado. Execute o setup primeiro.',
+      'auth/wrong-password':'Senha incorreta.',
+      'auth/invalid-credential':'Usuário ou senha incorretos.',
+      'auth/invalid-login-credentials':'Usuário ou senha incorretos.',
+      'auth/invalid-email':'Formato de usuário inválido.',
+      'auth/too-many-requests':'Muitas tentativas. Aguarde alguns minutos.',
+      'auth/network-request-failed':'Erro de rede. Verifique sua conexão.',
+      'auth/api-key-not-valid':'Firebase não configurado. Verifique o firebaseConfig.'
+    };
+    errEl.textContent=msgs[e.code]||('Erro ('+e.code+'): '+e.message);
+    console.error('Login error:',e.code,e.message);
   }finally{btn.disabled=false;btn.textContent='Entrar';}
 }
 
@@ -346,7 +358,8 @@ async function doChangePwd(){
     document.getElementById('newPwd').value='';document.getElementById('newPwd2').value='';
     await initPortal();
   }catch(e){
-    errEl.textContent=e.code==='auth/requires-recent-login'?'Sessão expirada. Faça login novamente.':'Erro ao salvar senha. Tente novamente.';
+    const msgs={'auth/requires-recent-login':'Sessão expirada. Faça login novamente.','auth/weak-password':'Senha muito fraca. Use pelo menos 6 caracteres.'};
+    errEl.textContent=msgs[e.code]||('Erro ao salvar senha ('+e.code+')');
   }finally{btn.disabled=false;btn.textContent='Salvar e Entrar';}
 }
 
@@ -408,22 +421,35 @@ async function doSetup(){
   const msg=document.getElementById('setupMsg');
   btn.disabled=true;btn.textContent='Criando…';
   msg.style.color='var(--tx2)';msg.textContent='Verificando…';
+  _setupInProgress=true; // impede onAuthStateChanged de interferir
   try{
     const cfgSnap=await db.collection('config').doc('setup').get();
-    if(cfgSnap.exists&&cfgSnap.data().done){msg.style.color='var(--yl)';msg.textContent='Setup já foi executado anteriormente.';btn.disabled=false;btn.textContent='Criar Usuários Agora';return;}
+    if(cfgSnap.exists&&cfgSnap.data().done){
+      msg.style.color='var(--yl)';msg.textContent='Setup já executado. Se precisar recriar, delete o doc config/setup no Firestore.';
+      btn.disabled=false;btn.textContent='Criar Usuários Agora';
+      return;
+    }
     const results=[];
     for(const u of _USERS){
       try{
         const cred=await auth.createUserWithEmailAndPassword(u.username+'@cop.rede','claro123');
         await db.collection('users').doc(cred.user.uid).set({username:u.username,role:u.role,mustChangePassword:true});
+        await auth.signOut(); // desconecta antes de criar o próximo usuário
         results.push('✓ '+u.username);
-      }catch(e){results.push('✗ '+u.username+' ('+e.message+')');}
+      }catch(e){
+        try{await auth.signOut();}catch(_){}
+        results.push('✗ '+u.username+' — '+e.message);
+      }
     }
     await db.collection('config').doc('setup').set({done:true,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
     msg.style.color='var(--gn)';
-    msg.textContent='Concluído: '+results.join(' | ');
-  }catch(e){msg.style.color='var(--rd)';msg.textContent='Erro: '+e.message;}
-  finally{btn.disabled=false;btn.textContent='Criar Usuários Agora';}
+    msg.textContent='Concluído! '+results.join(' | ')+' — Agora faça login normalmente.';
+  }catch(e){msg.style.color='var(--rd)';msg.textContent='Erro no setup: '+e.message;console.error(e);}
+  finally{
+    _setupInProgress=false;
+    btn.disabled=false;btn.textContent='Criar Usuários Agora';
+    showScreen('loginScreen'); // volta para tela de login após setup
+  }
 }
 
 // ═══════════ ANALYSTS ═══════════
