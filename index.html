@@ -89,6 +89,14 @@ tbody tr{cursor:pointer;transition:background .15s}tbody tr:hover{background:var
 .ov{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:200;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity .3s}
 .ov.show{opacity:1;pointer-events:all}.det{background:var(--sf);border-radius:16px;padding:26px;max-width:780px;width:93%;max-height:85vh;overflow-y:auto;border:1px solid var(--bd);transform:translateY(14px);transition:transform .3s}
 .ov.show .det{transform:translateY(0)}.det .xb{float:right;background:var(--sf3);border:none;color:var(--tx);width:28px;height:28px;border-radius:7px;cursor:pointer;font-size:15px}
+
+/* LOADING OVERLAY */
+.ld-ov{position:fixed;inset:0;background:rgba(11,15,26,.85);z-index:300;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;opacity:0;pointer-events:none;transition:opacity .25s}
+.ld-ov.show{opacity:1;pointer-events:all}
+.ld-spin{width:44px;height:44px;border:3px solid var(--bd);border-top-color:var(--ac);border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.ld-msg{font-size:.82rem;color:var(--tx2);text-align:center;max-width:280px;line-height:1.5}
+.ld-sub{font-size:.7rem;color:var(--tx3);margin-top:-8px}
 .det h2{font-size:1.1rem;margin-bottom:4px}.det .si{color:var(--tx3);font-size:.78rem;margin-bottom:16px;display:flex;align-items:center;gap:9px;flex-wrap:wrap}
 .dg{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:14px}
 .dk{background:var(--sf2);border-radius:9px;padding:12px;border:1px solid var(--bd)}
@@ -187,6 +195,7 @@ tbody tr{cursor:pointer;transition:background .15s}tbody tr:hover{background:var
 </div>
 
 <div class="ov" id="ov" onclick="if(event.target===this)closeDet()"><div class="det" id="detC"></div></div>
+<div class="ld-ov" id="ldOv"><div class="ld-spin"></div><div class="ld-msg" id="ldMsg">Processando planilha...</div><div class="ld-sub" id="ldSub">Arquivos grandes podem levar alguns segundos</div></div>
 
 <script>
 // ═══════════ ANALYSTS ═══════════
@@ -209,23 +218,36 @@ let curTab='dashboard',upOpen=true;
 // ═══════════ UPLOAD ═══════════
 function togUP(){upOpen=!upOpen;document.getElementById('upBody').classList.toggle('open',upOpen);document.getElementById('upArr').classList.toggle('open',upOpen);}
 
+function ldShow(msg,sub){const o=document.getElementById('ldOv');document.getElementById('ldMsg').textContent=msg||'Processando planilha...';document.getElementById('ldSub').textContent=sub||'Arquivos grandes podem levar alguns segundos';o.classList.add('show');}
+function ldHide(){document.getElementById('ldOv').classList.remove('show');}
+function yieldUI(){return new Promise(r=>setTimeout(r,0));}
+
 async function onFiles(input,type){
   const files=Array.from(input.files);if(!files.length)return;
+  const typeLabel={res:'Indicadores Residencial',toa:'Indicadores TOA',chat:'TOA Chat'}[type]||type;
   for(const file of files){
+    ldShow(`Lendo ${typeLabel}…`,`Arquivo: ${file.name}`);
+    await yieldUI();
     const buf=await file.arrayBuffer();
+    await yieldUI();
     try{
-      const wb=XLSX.read(buf,{type:'array',cellDates:true});
+      const wb=XLSX.read(buf,{type:'array'});
+      await yieldUI();
       if(type==='res')parseRes(wb);
       else if(type==='toa')parseTOA(wb);
       else if(type==='chat')parseChat(wb);
-    }catch(e){alert(`Erro em ${file.name}: ${e.message}`);console.error(e);}
+    }catch(e){ldHide();alert(`Erro em ${file.name}: ${e.message}`);console.error(e);}
   }
   input.value='';
+  ldHide();
   updUI();render();
 }
 async function onDPA(input){
   const file=input.files[0];if(!file)return;
-  try{await parseDPA(await file.arrayBuffer());}catch(e){alert('Erro DPA: '+e.message);console.error(e);}
+  ldShow('Lendo Ocupação DPA…',`Arquivo: ${file.name}`);
+  await yieldUI();
+  try{await parseDPA(await file.arrayBuffer());}catch(e){ldHide();alert('Erro DPA: '+e.message);console.error(e);return;}
+  ldHide();
   input.value='';updUI();render();
 }
 
