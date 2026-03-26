@@ -363,9 +363,12 @@ async function doSaveFbConfig(){
     }
     // Qualquer outro erro (INVALID_EMAIL, EMAIL_NOT_FOUND, etc.) significa que a chave é válida
     localStorage.setItem('fbConfig',JSON.stringify(cfg));
-    errEl.style.color='var(--gn)';errEl.textContent='Configuração válida! Carregando…';
-    // Recarrega a página para inicializar o SDK limpo com o config correto
-    setTimeout(()=>location.reload(),800);
+    // Gera link compartilhável com config codificado em base64 (config Firebase não é segredo)
+    const shareLink=location.origin+location.pathname+'#c='+btoa(JSON.stringify(cfg));
+    errEl.style.color='var(--gn)';
+    errEl.innerHTML='Configuração válida! <br><span style="font-size:.65rem;color:var(--tx3)">Link para outros dispositivos (copie e envie):</span><br>'
+      +'<span style="font-size:.63rem;color:var(--ac2);word-break:break-all;font-family:monospace">'+shareLink+'</span>';
+    setTimeout(()=>location.reload(),3500);
   }catch(e){
     errEl.style.color='var(--rd)';
     errEl.textContent='Erro de rede ao validar. Verifique sua conexão e tente novamente.';
@@ -380,11 +383,25 @@ function doResetFbConfig(){
 
 // Auto-init on load
 (function(){
+  // 1. Tenta importar config do fragmento de URL (#c=BASE64)
+  const hash=location.hash;
+  if(hash.startsWith('#c=')){
+    try{
+      const cfg=JSON.parse(atob(hash.slice(3)));
+      if(cfg.apiKey&&cfg.projectId){
+        localStorage.setItem('fbConfig',JSON.stringify(cfg));
+        // Limpa o hash da URL sem recarregar
+        history.replaceState(null,'',location.pathname+location.search);
+      }
+    }catch(_){}
+  }
+  // 2. Usa config do localStorage
   const stored=localStorage.getItem('fbConfig');
   if(stored){
     try{_initFirebase(JSON.parse(stored));return;}
     catch(e){localStorage.removeItem('fbConfig');console.warn('Config inválido no localStorage, redefinindo.');}
   }
+  // 3. Sem config: mostra tela de configuração
   _showCfgScreen();
 })();
 
@@ -534,18 +551,22 @@ async function doSetup(){
       return;
     }
     const results=[];
-    for(const u of _USERS){
+    for(let i=0;i<_USERS.length;i++){
+      const u=_USERS[i];
       try{
         const cred=await auth.createUserWithEmailAndPassword(u.username+'@cop.rede','claro123');
         await db.collection('users').doc(cred.user.uid).set({username:u.username,role:u.role,mustChangePassword:true});
-        await auth.signOut(); // desconecta antes de criar o próximo usuário
+        // Grava config/setup enquanto ainda está autenticado (último usuário criado)
+        if(i===_USERS.length-1){
+          await db.collection('config').doc('setup').set({done:true,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
+        }
+        await auth.signOut();
         results.push('✓ '+u.username);
       }catch(e){
         try{await auth.signOut();}catch(_){}
         results.push('✗ '+u.username+' — '+e.message);
       }
     }
-    await db.collection('config').doc('setup').set({done:true,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
     msg.style.color='var(--gn)';
     msg.textContent='Concluído! '+results.join(' | ');
     // Redireciona para login após 2s
