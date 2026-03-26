@@ -144,6 +144,16 @@ tbody tr{cursor:pointer;transition:background .15s}tbody tr:hover{background:var
 .setup-panel h3{font-size:.8rem;font-weight:600;color:var(--yl);margin-bottom:8px}
 .setup-panel p{font-size:.7rem;color:var(--tx3);margin-bottom:10px;line-height:1.5}
 
+/* CONFIG SCREEN */
+.cfg-steps{display:flex;flex-direction:column;gap:6px;margin-bottom:2px}
+.cfg-step{display:flex;align-items:flex-start;gap:8px;font-size:.71rem;color:var(--tx3);line-height:1.5}
+.cfg-step .sn{background:var(--ac);color:#fff;border-radius:50%;width:17px;height:17px;display:flex;align-items:center;justify-content:center;font-size:.6rem;font-weight:700;flex-shrink:0;margin-top:1px}
+.cfg-step strong{color:var(--tx2)}
+.cfg-textarea{background:var(--sf2);border:1px solid var(--bd);border-radius:10px;padding:11px 14px;color:var(--gn);font-family:'JetBrains Mono',monospace;font-size:.68rem;width:100%;height:130px;resize:vertical;transition:border-color .2s}
+.cfg-textarea:focus{outline:none;border-color:var(--ac)}
+.cfg-link{font-size:.7rem;color:var(--ac2);text-decoration:none}.cfg-link:hover{text-decoration:underline}
+.cfg-reset{font-size:.65rem;color:var(--tx3);background:none;border:none;cursor:pointer;font-family:inherit;padding:0;transition:color .2s}.cfg-reset:hover{color:var(--rd)}
+
 /* FOOTER */
 .portal-footer{text-align:center;padding:20px;font-size:.68rem;color:var(--tx3);border-top:1px solid var(--bd);margin-top:2rem}
 .portal-footer strong{color:var(--tx2)}
@@ -163,6 +173,7 @@ tbody tr{cursor:pointer;transition:background .15s}tbody tr:hover{background:var
   <input id="loginPwd" class="auth-input" type="password" placeholder="Senha" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
   <button class="auth-btn" id="loginBtn" onclick="doLogin()">Entrar</button>
   <div class="auth-err" id="loginErr"></div>
+  <div style="text-align:center"><button class="cfg-reset" onclick="doResetFbConfig()" title="Reconfigurar Firebase">⚙ Reconfigurar Firebase</button></div>
 </div>
 </div>
 
@@ -176,6 +187,24 @@ tbody tr{cursor:pointer;transition:background .15s}tbody tr:hover{background:var
   <input id="newPwd2" class="auth-input" type="password" placeholder="Confirmar nova senha" autocomplete="new-password" onkeydown="if(event.key==='Enter')doChangePwd()">
   <button class="auth-btn" id="pwdBtn" onclick="doChangePwd()">Salvar e Entrar</button>
   <div class="auth-err" id="pwdErr"></div>
+</div>
+</div>
+
+<!-- FIREBASE CONFIG SCREEN -->
+<div id="cfgScreen" class="auth-screen" style="display:none">
+<div class="auth-card" style="max-width:460px">
+  <div class="auth-logo"><div class="logo-i">CR</div><div><h2>COP Rede — Avaliação Home Office</h2><span>Configuração inicial necessária</span></div></div>
+  <hr class="auth-divider">
+  <h3 style="font-size:.88rem;font-weight:600;color:var(--tx);text-align:left">Conectar ao Firebase</h3>
+  <div class="cfg-steps">
+    <div class="cfg-step"><span class="sn">1</span><span>Acesse <a class="cfg-link" href="https://console.firebase.google.com" target="_blank">console.firebase.google.com</a> e crie um projeto</span></div>
+    <div class="cfg-step"><span class="sn">2</span><span><strong>Authentication → Sign-in method → E-mail/senha</strong> → Ativar</span></div>
+    <div class="cfg-step"><span class="sn">3</span><span><strong>Firestore Database → Criar banco → Modo produção</strong></span></div>
+    <div class="cfg-step"><span class="sn">4</span><span><strong>Configurações do projeto (⚙) → Seus apps → Web (</> )</strong> → copie e cole o objeto <code style="color:var(--gn);font-size:.68rem">firebaseConfig</code> abaixo:</span></div>
+  </div>
+  <textarea id="fbConfigInput" class="cfg-textarea" placeholder="const firebaseConfig = {&#10;  apiKey: &quot;AIza...&quot;,&#10;  authDomain: &quot;seu-projeto.firebaseapp.com&quot;,&#10;  projectId: &quot;seu-projeto&quot;,&#10;  ...&#10;};"></textarea>
+  <button class="auth-btn" id="cfgBtn" onclick="doSaveFbConfig()">Salvar e Continuar</button>
+  <div class="auth-err" id="cfgErr"></div>
 </div>
 </div>
 
@@ -277,40 +306,86 @@ tbody tr{cursor:pointer;transition:background .15s}tbody tr:hover{background:var
 </div><!-- /#portalWrap -->
 
 <script>
-// ═══════════ FIREBASE ═══════════
-// TODO: cole aqui a sua firebaseConfig do console.firebase.google.com
-const firebaseConfig = {
-  apiKey: "TODO",
-  authDomain: "TODO",
-  projectId: "TODO",
-  storageBucket: "TODO",
-  messagingSenderId: "TODO",
-  appId: "TODO"
-};
-firebase.initializeApp(firebaseConfig);
-const auth = firebase.auth();
-const db = firebase.firestore();
-let currentUser = null; // { uid, username, role }
-let _setupInProgress = false; // bloqueia onAuthStateChanged durante setup
+// ═══════════ FIREBASE — lazy init ═══════════
+let auth=null,db=null;
+let currentUser=null;
+let _setupInProgress=false;
+
+function _hasTodo(cfg){return!cfg||Object.values(cfg).some(v=>v==='TODO'||!v);}
+
+function _initFirebase(cfg){
+  if(!firebase.apps.length)firebase.initializeApp(cfg);
+  auth=firebase.auth();
+  db=firebase.firestore();
+  _setupAuthListener();
+}
+
+function _showCfgScreen(){
+  document.getElementById('cfgScreen').style.display='flex';
+  document.getElementById('loginScreen').style.display='none';
+  document.getElementById('pwdScreen').style.display='none';
+  document.getElementById('portalWrap').classList.add('portal-hidden');
+}
+
+function doSaveFbConfig(){
+  const text=document.getElementById('fbConfigInput').value.trim();
+  const errEl=document.getElementById('cfgErr');
+  const btn=document.getElementById('cfgBtn');
+  errEl.textContent='';
+  if(!text){errEl.textContent='Cole o firebaseConfig antes de continuar.';return;}
+  const fields=['apiKey','authDomain','projectId','storageBucket','messagingSenderId','appId'];
+  const cfg={};
+  for(const f of fields){
+    const m=text.match(new RegExp(f+'\\s*:\\s*["\']([^"\']+)["\']'));
+    if(m)cfg[f]=m[1];
+  }
+  if(!cfg.apiKey||cfg.apiKey==='TODO'){errEl.textContent='apiKey não encontrado. Verifique se colou o objeto firebaseConfig completo.';return;}
+  if(!cfg.projectId){errEl.textContent='projectId não encontrado.';return;}
+  if(!cfg.authDomain){errEl.textContent='authDomain não encontrado.';return;}
+  btn.disabled=true;btn.textContent='Salvando…';
+  try{
+    localStorage.setItem('fbConfig',JSON.stringify(cfg));
+    document.getElementById('cfgScreen').style.display='none';
+    _initFirebase(cfg);
+  }catch(e){errEl.textContent='Erro ao inicializar Firebase: '+e.message;console.error(e);}
+  finally{btn.disabled=false;btn.textContent='Salvar e Continuar';}
+}
+
+function doResetFbConfig(){
+  localStorage.removeItem('fbConfig');
+  _showCfgScreen();
+}
+
+// Auto-init on load
+(function(){
+  const stored=localStorage.getItem('fbConfig');
+  if(stored){
+    try{_initFirebase(JSON.parse(stored));return;}
+    catch(e){localStorage.removeItem('fbConfig');console.warn('Config inválido no localStorage, redefinindo.');}
+  }
+  _showCfgScreen();
+})();
 
 // ═══════════ AUTH FLOW ═══════════
 function showScreen(id){
-  ['loginScreen','pwdScreen'].forEach(s=>{const el=document.getElementById(s);if(el)el.style.display=s===id?'flex':'none';});
+  ['loginScreen','pwdScreen','cfgScreen'].forEach(s=>{const el=document.getElementById(s);if(el)el.style.display=s===id?'flex':'none';});
   const pw=document.getElementById('portalWrap');if(pw)pw.classList.toggle('portal-hidden',!!id);
 }
 
-auth.onAuthStateChanged(async fbUser=>{
-  if(_setupInProgress)return; // ignora durante criação de usuários
-  if(!fbUser){showScreen('loginScreen');return;}
-  try{
-    const snap=await db.collection('users').doc(fbUser.uid).get();
-    if(!snap.exists){await auth.signOut();showScreen('loginScreen');return;}
-    const profile=snap.data();
-    currentUser={uid:fbUser.uid,username:profile.username,role:profile.role};
-    if(profile.mustChangePassword){showScreen('pwdScreen');return;}
-    await initPortal();
-  }catch(e){console.error(e);await auth.signOut();showScreen('loginScreen');}
-});
+function _setupAuthListener(){
+  auth.onAuthStateChanged(async fbUser=>{
+    if(_setupInProgress)return;
+    if(!fbUser){showScreen('loginScreen');return;}
+    try{
+      const snap=await db.collection('users').doc(fbUser.uid).get();
+      if(!snap.exists){await auth.signOut();showScreen('loginScreen');return;}
+      const profile=snap.data();
+      currentUser={uid:fbUser.uid,username:profile.username,role:profile.role};
+      if(profile.mustChangePassword){showScreen('pwdScreen');return;}
+      await initPortal();
+    }catch(e){console.error(e);await auth.signOut();showScreen('loginScreen');}
+  });
+}
 
 async function doLogin(){
   const u=document.getElementById('loginUser').value.trim().toLowerCase();
