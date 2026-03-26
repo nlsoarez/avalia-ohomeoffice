@@ -173,7 +173,18 @@ tbody tr{cursor:pointer;transition:background .15s}tbody tr:hover{background:var
   <input id="loginPwd" class="auth-input" type="password" placeholder="Senha" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
   <button class="auth-btn" id="loginBtn" onclick="doLogin()">Entrar</button>
   <div class="auth-err" id="loginErr"></div>
-  <div style="text-align:center"><button class="cfg-reset" onclick="doResetFbConfig()" title="Reconfigurar Firebase">⚙ Reconfigurar Firebase</button></div>
+  <hr class="auth-divider">
+  <div id="shareLinkBox" style="display:none;flex-direction:column;gap:6px">
+    <p style="font-size:.68rem;color:var(--tx3);text-align:center">Link para outros dispositivos — copie e envie:</p>
+    <div style="display:flex;gap:6px;align-items:center">
+      <input id="shareLinkInput" class="auth-input" style="font-size:.62rem;font-family:monospace;color:var(--ac2);padding:7px 10px" readonly>
+      <button onclick="copyShareLink()" style="flex-shrink:0;padding:7px 12px;border-radius:9px;background:var(--sf3);border:1px solid var(--bd);color:var(--tx2);font-size:.72rem;cursor:pointer;font-family:inherit;white-space:nowrap" id="copyBtn">Copiar</button>
+    </div>
+  </div>
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px">
+    <button class="cfg-reset" onclick="doResetFbConfig()">⚙ Reconfigurar Firebase</button>
+    <button class="cfg-reset" id="genLinkBtn" onclick="genShareLink()" style="color:var(--ac2)">🔗 Gerar link para outros dispositivos</button>
+  </div>
 </div>
 </div>
 
@@ -379,6 +390,33 @@ async function doSaveFbConfig(){
 function doResetFbConfig(){
   localStorage.removeItem('fbConfig');
   _showCfgScreen();
+}
+
+function genShareLink(){
+  const stored=localStorage.getItem('fbConfig');
+  if(!stored){alert('Firebase não configurado neste dispositivo.');return;}
+  try{
+    const cfg=JSON.parse(stored);
+    const encoded=btoa(JSON.stringify(cfg));
+    const url=location.origin+location.pathname+'#c='+encoded;
+    document.getElementById('shareLinkInput').value=url;
+    const box=document.getElementById('shareLinkBox');
+    box.style.display='flex';
+    document.getElementById('genLinkBtn').style.display='none';
+  }catch(e){alert('Erro ao gerar link: '+e.message);}
+}
+
+function copyShareLink(){
+  const input=document.getElementById('shareLinkInput');
+  navigator.clipboard.writeText(input.value).then(()=>{
+    const btn=document.getElementById('copyBtn');
+    btn.textContent='Copiado ✓';
+    btn.style.color='var(--gn)';
+    setTimeout(()=>{btn.textContent='Copiar';btn.style.color='';},2500);
+  }).catch(()=>{
+    input.select();
+    document.execCommand('copy');
+  });
 }
 
 // Auto-init on load
